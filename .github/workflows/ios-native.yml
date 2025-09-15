@@ -1,0 +1,154 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [ main,master,maina ]
+ 
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    env:
+      DEVELOPMENT_TEAM: UA9Z6NRCL8
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: "iPhone Distribution"
+      PROVISIONING_PROFILE_SPECIFIER: "Flutter1 Distribution"
+      ARCHS: "arm64"
+      ONLY_ACTIVE_ARCH: "NO"
+      VALID_ARCHS: "arm64 arm64e"
+    
+    steps:
+    - uses: actions/checkout@v4
+    - uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.24.5'
+        channel: 'stable'
+    
+    - name: 设置Xcode版本 (优先 Xcode 15.4)
+      run: |
+        echo "=== 选择 Xcode 版本 (优先 15.4) ==="
+        if [ -d "/Applications/Xcode_15.4.app" ]; then
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          echo "使用 /Applications/Xcode_15.4.app"
+        elif [ -d "/Applications/Xcode-15.4.app" ]; then
+          sudo xcode-select -s /Applications/Xcode-15.4.app/Contents/Developer
+          echo "使用 /Applications/Xcode-15.4.app"
+        else
+          echo "未找到 Xcode 15.4，退回到 /Applications/Xcode.app（如果可用）"
+          if [ -d "/Applications/Xcode.app" ]; then
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          else
+            echo "警告：未找到任何 /Applications/Xcode*.app，后续 xcodebuild 可能失败。"
+          fi
+        fi
+        echo "当前 Xcode 选择路径:"; xcode-select -p
+        echo "Xcode 版本信息:"; xcodebuild -version
+    
+    - name: 验证开发环境
+      run: |
+        echo "=== 验证macOS版本 ==="
+        sw_vers
+        echo "=== 验证Flutter版本 ==="
+        flutter --version
+        echo "=== 验证Xcode版本 ==="
+        xcodebuild -version
+        echo "=== 验证Git版本 ==="
+        git --version
+
+    - name: 配置iOS证书和描述文件
+      run: |
+        set -euo pipefail
+        echo "=== 检查证书 secrets 是否已配置 ==="
+        if [ -z "${{ secrets.IOS_P12_BASE64 }}" ] || [ -z "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" ] || [ -z "${{ secrets.KEYCHAIN_PASSWORD }}" ] || [ -z "${{ secrets.P12_PASSWORD }}" ]; then
+          echo "⚠️  警告：iOS证书secrets未完全配置，将跳过证书安装并继续构建（使用 --no-codesign）"
+          CERTS_AVAILABLE=false
+        else
+          CERTS_AVAILABLE=true
+        fi
+
+        if [ "$CERTS_AVAILABLE" = "true" ]; then
+          echo "=== 开始配置证书和描述文件 ==="
+          mkdir -p ~/private_keys
+
+          # 兼容多个 base64 工具的解码函数（macOS / GNU）
+          decode_base64() {
+            local input="$1"; local out="$2"
+            if echo "$input" | base64 --decode > "$out" 2>/dev/null; then return 0; fi
+            if echo "$input" | base64 -D > "$out" 2>/dev/null; then return 0; fi
+            if echo "$input" | base64 -d > "$out" 2>/dev/null; then return 0; fi
+            return 1
+          }
+
+          echo "解码P12证书..."
+          if ! decode_base64 "${{ secrets.IOS_P12_BASE64 }}" ~/private_keys/certificate.p12; then
+            echo "❌ P12证书解码失败"
+            exit 1
+          fi
+
+          echo "解码Provisioning Profile..."
+          if ! decode_base64 "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" ~/private_keys/profile.mobileprovision; then
+            echo "❌ Provisioning Profile解码失败"
+            exit 1
+          fi
+
+          echo "创建并配置临时 keychain..."
+          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+
+          echo "导入 P12 到 keychain..."
+          security import ~/private_keys/certificate.p12 -k build.keychain -P "${{ secrets.P12_PASSWORD }}" -A
+
+          # 设置分区列表，允许 codesign 和 xcodebuild 使用密钥
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain || true
+
+          echo "安装 mobileprovision 文件..."
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp ~/private_keys/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+          echo "列出可用的证书和描述文件（便于调试）"
+          security find-identity -v -p codesigning || true
+          ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ || true
+        else
+          echo "跳过证书安装（secrets 不完整）"
+        fi
+
+    - name: iOS构建 (64位真机/无签名回退)
+      run: |
+        set -euo pipefail
+        trap 'echo "❌ 脚本在第 $LINENO 行失败，退出码：$?"' ERR
+        echo "=== 开始 iOS 构建 ==="
+        # 先做通用清理与依赖安装
+        flutter clean || { echo "flutter clean 失败，退出码：$?"; exit 1; }
+        flutter pub get || { echo "flutter pub get 失败，退出码：$?"; exit 1; }
+
+        # 如果证书 secrets 可用，则进行签名构建；否则使用 --no-codesign 回退
+        if [ -n "${{ secrets.IOS_P12_BASE64 }}" ] && [ -n "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" ] && [ -n "${{ secrets.KEYCHAIN_PASSWORD }}" ] && [ -n "${{ secrets.P12_PASSWORD }}" ]; then
+          echo "证书 secrets 存在，尝试进行签名构建（确保证书已成功安装）"
+          # 确保 CocoaPods 依赖已安装
+          cd openim-ios-demo/Example
+          tries=0
+          until [ $tries -ge 3 ]
+          do
+            pod install
+            echo "pod install 失败，尝试 pod repo update 再重试..."
+            pod repo update
+            tries=$((tries+1))
+            echo "pod install 失败，重试第 $tries 次..."
+            sleep 3
+          done
+          if [ $tries -ge 3 ]; then
+            echo "❌ pod install 在重试后仍然失败，保留原始错误以便调试。"
+            exit 1
+          fi
+          cd OpenIMSDKUIKit.xcworkspace
+          # 使用 release 模式并指定导出方式（根据需要改为 app-store / enterprise / development）
+          echo "开始 flutter build ipa (signed)"
+         OpenIMSDKUIKit.xcworkspace xcodebuild -workspace OpenIMSDKUIKit.xcworkspace -scheme OpenIMSDKUIKit -configuration Debug build xcodebuild -workspace OpenIMSDKUIKit.xcworkspace -scheme OpenIMSDKUIKit -configuration Debug run
+
+        fi
+
+        echo "=== 构建完成，查找 IPA 文件 ==="
+        find build/ios/ipa -name "*.ipa" -type f || true
+        echo "iOS构建脚本退出码：$?"
