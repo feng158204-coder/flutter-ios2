@@ -95,8 +95,8 @@ jobs:
           pod install
       - name: iOS原生构建
         run: |
-          cd Example/OpenIMSDKUIKit.xcworkspace
-            xcodebuild -workspace OpenIMSDKUIKit.xcworkspace \
+          cd Example
+            xcodebuild -workspace OpenIMSDKUIKit.xcworkspace  \
               -scheme OpenIMSDKUIKit \
               -configuration Release \
               -sdk iphoneos \
