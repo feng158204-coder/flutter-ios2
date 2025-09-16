@@ -4,7 +4,7 @@ workflows:
       xcode: latest  # 用官方推荐的Xcode环境，不额外改
     scripts:
       # 1. 进入官方Demo的Example目录（克隆后仓库名就是openim-ios-demo）
-      - script: cd openim-ios-demo/Example
+      - script: cd Example
       # 2. 官方步骤：pod install，失败就更新repo（和官方文档完全一致）
       - script: pod install || pod repo update
       # 3. 官方步骤：编译运行（命令和Xcode打开xcworkspace编译完全等效）
