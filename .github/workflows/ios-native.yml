@@ -13,96 +13,184 @@ jobs:
       ARCHS: "arm64"
       ONLY_ACTIVE_ARCH: "NO"
       VALID_ARCHS: "arm64 arm64e"
+      # 定义归档和IPA输出路径（统一管理）
+      ARCHIVE_PATH: "./Example/build/OpenIM_Archive.xcarchive"
+      IPA_OUTPUT_PATH: "./Example/build/IPA_Output"
+
     steps:
       - uses: actions/checkout@v4
+
       - name: 设置Xcode版本 (优先 Xcode 15.4)
         run: |
           echo "=== 选择 Xcode 版本 (优先 15.4) ==="
-          if [ -d "/Applications/Xcode_15.4.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
-            echo "使用 /Applications/Xcode_15.4.app"
-          elif [ -d "/Applications/Xcode-15.4.app" ]; then
-            sudo xcode-select -s /Applications/Xcode-15.4.app/Contents/Developer
-            echo "使用 /Applications/Xcode-15.4.app"
-          else
-            echo "未找到 Xcode 15.4，退回到 /Applications/Xcode.app（如果可用）"
-            if [ -d "/Applications/Xcode.app" ]; then
-              sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-            else
-              echo "警告：未找到任何 /Applications/Xcode*.app，后续 xcodebuild 可能失败。"
+          # 统一处理Xcode路径（兼容下划线/横杠命名）
+          XCODE_PATHS=("/Applications/Xcode_15.4.app" "/Applications/Xcode-15.4.app" "/Applications/Xcode.app")
+          SELECTED_XCODE=""
+          for path in "${XCODE_PATHS[@]}"; do
+            if [ -d "$path" ]; then
+              SELECTED_XCODE="$path"
+              break
             fi
+          done
+          if [ -n "$SELECTED_XCODE" ]; then
+            sudo xcode-select -s "$SELECTED_XCODE/Contents/Developer"
+            echo "✅ 使用 Xcode: $SELECTED_XCODE"
+          else
+            echo "⚠️  未找到任何可用Xcode，后续构建可能失败！"
+            exit 1
           fi
-          echo "当前 Xcode 选择路径:"; xcode-select -p
-          echo "Xcode 版本信息:"; xcodebuild -version
+          echo "当前 Xcode 路径:"; xcode-select -p
+          echo "Xcode 版本:"; xcodebuild -version
+
       - name: 验证开发环境
         run: |
-          echo "=== 验证macOS版本 ==="
-          sw_vers
-          echo "=== 验证Xcode版本 ==="
-          xcodebuild -version
-          echo "=== 验证Git版本 ==="
-          git --version
+          echo "=== macOS 版本 ==="; sw_vers
+          echo "=== Xcode 版本 ==="; xcodebuild -version
+          echo "=== Git 版本 ==="; git --version
+          echo "=== CocoaPods 版本 ==="; pod --version
+
       - name: 配置iOS证书和描述文件
         run: |
+          set -euo pipefail  # 严格模式，出错即退出
+          echo "=== 检查证书 Secrets 配置 ==="
+          # 校验必需的Secrets是否存在
+          required_secrets=("IOS_P12_BASE64" "IOS_MOBILEPROVISION_BASE64" "KEYCHAIN_PASSWORD" "P12_PASSWORD")
+          for secret in "${required_secrets[@]}"; do
+            if [ -z "${{ secrets[secret] }}" ]; then
+              echo "❌ 缺失必需Secret: $secret，构建将失败！"
+              exit 1
+            fi
+          done
+
+          echo "=== 解码证书和描述文件 ==="
+          mkdir -p ~/private_keys
+          # 通用base64解码函数（兼容不同系统base64命令）
+          decode_base64() {
+            local input="$1"
+            local output="$2"
+            if echo "$input" | base64 --decode > "$output" 2>/dev/null; then
+              return 0
+            elif echo "$input" | base64 -d > "$output" 2>/dev/null; then
+              return 0
+            else
+              echo "❌ 解码 $output 失败"
+              exit 1
+            fi
+          }
+          # 解码P12证书
+          decode_base64 "${{ secrets.IOS_P12_BASE64 }}" ~/private_keys/certificate.p12
+          # 解码描述文件
+          decode_base64 "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" ~/private_keys/profile.mobileprovision
+
+          echo "=== 配置临时钥匙串 ==="
+          # 创建独立钥匙串（避免干扰系统钥匙串）
+          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+          # 设置钥匙串超时（避免构建中锁死）
+          security set-keychain-settings -t 3600 -u build.keychain
+
+          echo "=== 导入P12证书 ==="
+          security import ~/private_keys/certificate.p12 \
+            -k build.keychain \
+            -P "${{ secrets.P12_PASSWORD }}" \
+            -A  # 允许所有应用访问证书（CI环境必需）
+          # 修复证书分区权限（解决Xcode签名权限问题）
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
+
+          echo "=== 安装描述文件 ==="
+          PROFILE_DIR=~/Library/MobileDevice/Provisioning\ Profiles
+          mkdir -p "$PROFILE_DIR"
+          # 复制描述文件到系统目录（Xcode会自动识别）
+          cp ~/private_keys/profile.mobileprovision "$PROFILE_DIR/"
+          # 打印描述文件列表（便于调试）
+          echo "已安装的描述文件:"
+          ls -la "$PROFILE_DIR/"
+
+          echo "=== 验证证书有效性 ==="
+          security find-identity -v -p codesigning  # 列出可用签名证书
+          if ! security find-identity -v -p codesigning | grep -q "$CODE_SIGN_IDENTITY"; then
+            echo "❌ 未找到签名证书: $CODE_SIGN_IDENTITY"
+            exit 1
+          fi
+
+      - name: 安装依赖（CocoaPods）
+        run: |
+          echo "=== 更新CocoaPods仓库 ==="
+          pod repo update || true  # 仓库更新失败不强制退出（网络波动兼容）
+          echo "=== 安装项目依赖 ==="
+          cd Example
+          pod install --verbose  #  verbose模式便于调试依赖问题
+
+      - name: 构建归档 + 导出IPA
+        run: |
           set -euo pipefail
-          echo "=== 检查证书 secrets 是否已配置 ==="
-          if [ -z "${{ secrets.IOS_P12_BASE64 }}" ] || [ -z "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" ] || [ -z "${{ secrets.KEYCHAIN_PASSWORD }}" ] || [ -z "${{ secrets.P12_PASSWORD }}" ]; then
-            echo "⚠️  警告：iOS证书secrets未完全配置，将跳过证书安装并继续构建"
-            CERTS_AVAILABLE=false
+          cd Example  # 进入Example目录（工作区所在路径）
+
+          echo "=== 1. 生成归档文件（.xcarchive） ==="
+          xcodebuild -workspace OpenIMSDKUIKit.xcworkspace \
+            -scheme OpenIMSDKUIKit_Example \  # 修正：使用示例工程的正确Scheme
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$ARCHIVE_PATH" \  # 使用预定义的归档路径
+            CODE_SIGN_STYLE="$CODE_SIGN_STYLE" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            ARCHS="$ARCHS" \
+            ONLY_ACTIVE_ARCH="$ONLY_ACTIVE_ARCH" \
+            VALID_ARCHS="$VALID_ARCHS" \
+            clean archive  # 先clean再归档（避免缓存问题）
+
+          echo "=== 2. 从归档导出IPA ==="
+          # 生成ExportOptions.plist（导出配置，适配Manual签名）
+          cat > ExportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>  <!-- 按需求修改：ad-hoc/enterprise/app-store -->
+            <key>signingStyle</key>
+            <string>manual</string>  <!-- 对应CODE_SIGN_STYLE=Manual -->
+            <key>teamID</key>
+            <string>$DEVELOPMENT_TEAM</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <!-- 配置Bundle ID与描述文件的映射（需与项目Bundle ID一致） -->
+              <key>io.openim.ios.demoo</key>  <!-- 主应用Bundle ID（从之前错误日志获取） -->
+              <string>$PROVISIONING_PROFILE_SPECIFIER</string>
+              <key>io.openim.ios.demoo.NotificationService</key>  <!-- 通知扩展Bundle ID -->
+              <string>$PROVISIONING_PROFILE_SPECIFIER</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+
+          # 执行导出IPA命令
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$IPA_OUTPUT_PATH" \  # 导出IPA到预定义路径
+            -exportOptionsPlist ExportOptions.plist \  # 使用上面生成的配置文件
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
+
+          echo "=== 验证IPA生成结果 ==="
+          # 查找生成的IPA文件并打印路径
+          IPA_FILE=$(find "$IPA_OUTPUT_PATH" -name "*.ipa" -type f | head -n 1)
+          if [ -n "$IPA_FILE" ]; then
+            echo "✅ IPA生成成功！路径: $IPA_FILE"
+            echo "IPA文件信息:"
+            ls -lh "$IPA_FILE"
           else
-            CERTS_AVAILABLE=true
+            echo "❌ 未找到生成的IPA文件！"
+            exit 1
           fi
-          if [ "$CERTS_AVAILABLE" = "true" ]; then
-            echo "=== 开始配置证书和描述文件 ==="
-            mkdir -p ~/private_keys
-            decode_base64() {
-              local input="$1"; local out="$2"
-              if echo "$input" | base64 --decode > "$out" 2>/dev/null; then return 0; fi
-              if echo "$input" | base64 -D > "$out" 2>/dev/null; then return 0; fi
-              if echo "$input" | base64 -d > "$out" 2>/dev/null; then return 0; fi
-              return 1
-            }
-            echo "解码P12证书..."
-            if ! decode_base64 "${{ secrets.IOS_P12_BASE64 }}" ~/private_keys/certificate.p12; then
-              echo "❌ P12证书解码失败"
-              exit 1
-            fi
-            echo "解码Provisioning Profile..."
-            if ! decode_base64 "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" ~/private_keys/profile.mobileprovision; then
-              echo "❌ Provisioning Profile解码失败"
-              exit 1
-            fi
-            echo "创建并配置临时 keychain..."
-            security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
-            security default-keychain -s build.keychain
-            security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain
-            security set-keychain-settings -t 3600 -u build.keychain
-            echo "导入 P12 到 keychain..."
-            security import ~/private_keys/certificate.p12 -k build.keychain -P "${{ secrets.P12_PASSWORD }}" -A
-            security set-key-partition-list -S apple-tool:,apple: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" build.keychain || true
-            echo "安装 mobileprovision 文件..."
-            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-            cp ~/private_keys/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-            echo "列出可用的证书和描述文件（便于调试）"
-            security find-identity -v -p codesigning || true
-            ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ || true
-          else
-            echo "跳过证书安装（secrets 不完整）"
-          fi
-      - name: 安装依赖
-        run: |
-          cd Example
-          pod install
-      - name: iOS原生构建
-        run: |
-          cd Example
-            xcodebuild -workspace OpenIMSDKUIKit.xcworkspace  \
-              -scheme OpenIMSDKUIKit \
-              -configuration Release \
-              -sdk iphoneos \
-              CODE_SIGN_IDENTITY="iPhone Distribution" \
-              PROVISIONING_PROFILE_SPECIFIER="Flutter1 Distribution" \
-              DEVELOPMENT_TEAM=UA9Z6NRCL8 \
-              clean build
-            echo "=== 构建完成，查找 IPA 文件 ==="
-            find build/ios/ipa -name "*.ipa" -type f || true
+
+      # 关键：添加产物收集（便于构建后下载IPA）
+      - name: 上传IPA产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOS-IPA
+          path: ${{ env.IPA_OUTPUT_PATH }}/*.ipa  # 匹配导出的IPA文件
+          retention-days: 7  # 产物保留7天（可调整）
