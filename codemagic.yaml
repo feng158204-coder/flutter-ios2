@@ -1,20 +1,19 @@
 workflows:
   openim-ios-demo-build:
     environment:
-      xcode: latest  # 用官方推荐的Xcode环境，不额外改
+      xcode: latest  # 官方默认Xcode环境
     scripts:
-      # 1. 进入官方Demo的Example目录（克隆后仓库名就是openim-ios-demo）
-      - script: cd Example
-      # 2. 官方步骤：pod install，失败就更新repo（和官方文档完全一致）
+      # 1. 正确进入Example目录（克隆后仓库名是openim-ios-demo，里面才有Example）
+      - script: cd openim-ios-demo/Example  # 修正路径，和官方clone步骤完全对应
+      # 2. 官方步骤：安装依赖
       - script: pod install || pod repo update
-      # 3. 官方步骤：编译运行（命令和Xcode打开xcworkspace编译完全等效）
+      # 3. 明确指定工作区和Scheme（和官方Demo的文件名完全一致，没有省略）
       - script: |
           xcodebuild \
-            -workspace OpenIMSDKUIKit.xcworkspace \  # 官方的xcworkspace文件名
-            -scheme OpenIMSDKUIKit_Example \         # 官方默认的Scheme名（没改代码就不用动）
-            -configuration Debug \                   # 官方开发测试用Debug，不是Release
-            -sdk iphoneos \                          # 编译iOS设备版本
-            clean build                               # 编译（和Xcode点“运行”一样）
-    # 不需要产物就删artifacts，需要就保留（官方没提，可选）
+            -workspace OpenIMSDKUIKit.xcworkspace \  # 明确指定官方的xcworkspace
+            -scheme OpenIMSDKUIKit_Example \         # 明确指定官方默认Scheme
+            -configuration Debug \
+            -sdk iphoneos \
+            clean build
     artifacts:
-      - openim-ios-demo/Example/build/**/*.app  # 编译出的APP文件（官方Demo默认产物）
+      - openim-ios-demo/Example/build/**/*.app  # 正确的产物路径
