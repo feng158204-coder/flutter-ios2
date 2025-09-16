@@ -9,18 +9,32 @@ workflows:
         PROVISIONING_PROFILE_SPECIFIER: "Flutter1 Distribution"
     scripts:
       - name: 安装依赖
-        script: |
-          cd Example
+        script: |  # 注意：script与name同级缩进
+          cd Example 
           pod install
-      - name: 构建 iOS
-        script: |
-          xcodebuild -workspace Example/OpenIMSDKUIKit.xcworkspace -list \
-            -scheme OpenIMSDKUIKit \
-            -configuration Release \
-            -sdk iphoneos \
-            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
-            DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM \
-            clean build
-    artifacts:
-      - Example/build/ios/ipa/*.ipa
+
+      - name: 构建并导出iOS IPA
+        script: |  # 同上，保持缩进一致
+          cd Example  # 确保在Example目录下执行
+          # 1. 归档项目（生成.xcarchive）
+          xcodebuild -workspace OpenIMSDKUIKit.xcworkspace \
+                     -scheme OpenIMSDKUIKit_Example \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -archivePath ./build/OpenIM_Archive.xcarchive \
+                     CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+                     PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
+                     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+                     -allowProvisioningUpdates \
+                     clean archive
+
+          # 2. 从归档导出IPA
+          xcodebuild -exportArchive \
+                     -archivePath ./build/OpenIM_Archive.xcarchive \
+                     -exportPath ./build/IPA_Output \
+                     -exportOptionsPlist ./ExportOptions.plist \
+                     CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+                     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
+
+artifacts:
+  - Example/build/IPA_Output/*.ipa  # 路径与导出目录一致，正确
