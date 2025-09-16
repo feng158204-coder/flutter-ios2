@@ -4,7 +4,7 @@ workflows:
       xcode: latest  # 官方默认Xcode环境
     scripts:
       # 1. 正确进入Example目录（克隆后仓库名是openim-ios-demo，里面才有Example）
-      - script: cd openim-ios-demo/Example  # 修正路径，和官方clone步骤完全对应
+      - script: cd Example  # 修正路径，和官方clone步骤完全对应
       # 2. 官方步骤：安装依赖
       - script: pod install || pod repo update
       # 3. 明确指定工作区和Scheme（和官方Demo的文件名完全一致，没有省略）
