@@ -9,11 +9,6 @@ workflows:
       - script: pod install || pod repo update
       # 3. 明确指定工作区和Scheme（和官方Demo的文件名完全一致，没有省略）
       - script: |
-          xcodebuild \
-            -workspace OpenIMSDKUIKit.xcworkspace \  # 明确指定官方的xcworkspace
-            -scheme OpenIMSDKUIKit_Example \         # 明确指定官方默认Scheme
-            -configuration Debug \
-            -sdk iphoneos \
-            clean build
+          xcodebuild clean build -workspace OpenIMSDKUIKit.xcworkspace -scheme OpenIMSDKUIKit_Example -configuration Debug -sdk iphoneos
     artifacts:
       - openim-ios-demo/Example/build/**/*.app  # 正确的产物路径
