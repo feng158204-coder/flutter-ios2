@@ -1,40 +1,20 @@
 workflows:
-  ios-native-build:
-    name: iOS Native Build
+  openim-ios-demo-build:
     environment:
-      xcode: latest
-      vars:
-        DEVELOPMENT_TEAM: UA9Z6NRCL8
-        CODE_SIGN_IDENTITY: "iPhone Distribution"
-        PROVISIONING_PROFILE_SPECIFIER: "Flutter1 Distribution"
+      xcode: latest  # 用官方推荐的Xcode环境，不额外改
     scripts:
-      - name: 安装依赖
-        script: |  # 注意：script与name同级缩进
-          cd Example 
-          pod install
-
-      - name: 构建并导出iOS IPA
-        script: |  # 同上，保持缩进一致
-          cd Example  # 确保在Example目录下执行
-          # 1. 归档项目（生成.xcarchive）
-          xcodebuild -workspace OpenIMSDKUIKit.xcworkspace \
-                     -scheme OpenIMSDKUIKit_Example \
-                     -configuration Release \
-                     -sdk iphoneos \
-                     -archivePath ./build/OpenIM_Archive.xcarchive \
-                     CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
-                     PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
-                     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-                     -allowProvisioningUpdates \
-                     clean archive
-
-          # 2. 从归档导出IPA
-          xcodebuild -exportArchive \
-                     -archivePath ./build/OpenIM_Archive.xcarchive \
-                     -exportPath ./build/IPA_Output \
-                     -exportOptionsPlist ./ExportOptions.plist \
-                     CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
-                     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
-
-artifacts:
-  - Example/build/IPA_Output/*.ipa  # 路径与导出目录一致，正确
+      # 1. 进入官方Demo的Example目录（克隆后仓库名就是openim-ios-demo）
+      - script: cd openim-ios-demo/Example
+      # 2. 官方步骤：pod install，失败就更新repo（和官方文档完全一致）
+      - script: pod install || pod repo update
+      # 3. 官方步骤：编译运行（命令和Xcode打开xcworkspace编译完全等效）
+      - script: |
+          xcodebuild \
+            -workspace OpenIMSDKUIKit.xcworkspace \  # 官方的xcworkspace文件名
+            -scheme OpenIMSDKUIKit_Example \         # 官方默认的Scheme名（没改代码就不用动）
+            -configuration Debug \                   # 官方开发测试用Debug，不是Release
+            -sdk iphoneos \                          # 编译iOS设备版本
+            clean build                               # 编译（和Xcode点“运行”一样）
+    # 不需要产物就删artifacts，需要就保留（官方没提，可选）
+    artifacts:
+      - openim-ios-demo/Example/build/**/*.app  # 编译出的APP文件（官方Demo默认产物）
