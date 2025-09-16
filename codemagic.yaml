@@ -14,7 +14,7 @@ workflows:
           pod install
       - name: 构建 iOS
         script: |
-          xcodebuild -workspace Example/OpenIMSDKUIKit.xcworkspace \
+          xcodebuild -workspace Example/OpenIMSDKUIKit.xcworkspace -list \
             -scheme OpenIMSDKUIKit \
             -configuration Release \
             -sdk iphoneos \
