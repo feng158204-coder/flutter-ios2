@@ -96,12 +96,14 @@ jobs:
           pod install
       - name: iOS原生构建
         run: |
-          cd Example
-          xcodebuild -workspace OpenIMSDKUIKit.xcworkspace \
-            -scheme OpenIMSDKUIKit \
-            -configuration Release \
-            -sdk iphoneos \
-            CODE_SIGN_IDENTITY="iPhone Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="Flutter1 Distribution" \
-            DEVELOPMENT_TEAM=UA9Z6NRCL8 \
-            clean build
+          cd Example/OpenIMSDKUIKit.xcworkspace
+            xcodebuild -workspace OpenIMSDKUIKit.xcworkspace \
+              -scheme OpenIMSDKUIKit \
+              -configuration Release \
+              -sdk iphoneos \
+              CODE_SIGN_IDENTITY="iPhone Distribution" \
+              PROVISIONING_PROFILE_SPECIFIER="Flutter1 Distribution" \
+              DEVELOPMENT_TEAM=UA9Z6NRCL8 \
+              clean build
+            echo "=== 构建完成，查找 IPA 文件 ==="
+            find build/ios/ipa -name "*.ipa" -type f || true
