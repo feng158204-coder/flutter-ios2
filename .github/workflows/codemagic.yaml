@@ -1,0 +1,26 @@
+workflows:
+  ios-native-build:
+    name: iOS Native Build
+    environment:
+      xcode: latest
+      vars:
+        DEVELOPMENT_TEAM: UA9Z6NRCL8
+        CODE_SIGN_IDENTITY: "iPhone Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "Flutter1 Distribution"
+    scripts:
+      - name: 安装依赖
+        script: |
+          cd Example
+          pod install
+      - name: 构建 iOS
+        script: |
+          xcodebuild -workspace Example/OpenIMSDKUIKit.xcworkspace \
+            -scheme OpenIMSDKUIKit \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
+            DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM \
+            clean build
+    artifacts:
+      - Example/build/ios/ipa/*.ipa
